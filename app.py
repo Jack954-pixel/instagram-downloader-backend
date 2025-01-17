@@ -2,6 +2,7 @@ from flask import Flask, request, jsonify, send_file
 import instaloader
 import os
 import uuid
+import shutil
 
 app = Flask(__name__)
 
@@ -13,21 +14,32 @@ DOWNLOAD_FOLDER = "downloads"
 if not os.path.exists(DOWNLOAD_FOLDER):
     os.makedirs(DOWNLOAD_FOLDER)
 
+# Login to Instagram (optional but recommended for private or restricted posts)
+USERNAME = os.getenv("INSTAGRAM_USERNAME")  # Set your Instagram username in environment variables
+PASSWORD = os.getenv("INSTAGRAM_PASSWORD")  # Set your Instagram password in environment variables
+
+if USERNAME and PASSWORD:
+    try:
+        L.login(USERNAME, PASSWORD)
+        print("Logged in successfully")
+    except instaloader.exceptions.BadCredentialsException:
+        print("Error: Invalid Instagram credentials")
+    except Exception as e:
+        print(f"Login error: {e}")
+
 
 @app.route("/download", methods=["POST"])
 def download_post():
     try:
-        # Get the Instagram URL from the form data
-        post_url = request.form.get("post_url").strip()
-
-        # Validate URL
-        if "instagram.com" not in post_url or not post_url:
+        # Get the Instagram URL from the request
+        post_url = request.form.get("post_url")
+        if not post_url or "instagram.com" not in post_url:
             return jsonify({"error": "Invalid Instagram URL"}), 400
 
         # Extract the shortcode from the URL
         shortcode = post_url.split("/")[-2]
 
-        # Define a unique folder name to avoid conflicts
+        # Create a unique folder to avoid filename conflicts
         unique_id = str(uuid.uuid4())
         target_folder = os.path.join(DOWNLOAD_FOLDER, unique_id)
         os.makedirs(target_folder)
@@ -37,15 +49,25 @@ def download_post():
         L.download_post(post, target=target_folder)
 
         # Find the downloaded file (image or video)
+        downloaded_file = None
         for file in os.listdir(target_folder):
             if file.endswith((".jpg", ".mp4")):
-                file_path = os.path.join(target_folder, file)
+                downloaded_file = os.path.join(target_folder, file)
+                break
 
-                # Serve the file directly to the client
-                return send_file(file_path, as_attachment=True)
+        if not downloaded_file:
+            return jsonify({"error": "Failed to download post content"}), 500
 
-        return jsonify({"error": "Failed to download post"}), 500
+        # Serve the downloaded file to the client
+        response = send_file(downloaded_file, as_attachment=True)
 
+        # Clean up temporary files after serving the file
+        shutil.rmtree(target_folder, ignore_errors=True)
+
+        return response
+
+    except instaloader.exceptions.InstaloaderException as e:
+        return jsonify({"error": f"Instaloader error: {str(e)}"}), 500
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
